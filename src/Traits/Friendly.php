@@ -4,6 +4,7 @@ namespace GridPrinciples\Friendly\Traits;
 
 use GridPrinciples\Friendly\FriendPivot;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Collection;
 
 trait Friendly
 {
@@ -69,12 +70,37 @@ trait Friendly
     }
 
     /**
-     * Sort of acts like a relationship.  Actually just gets two relations which are collected together.
+     * Approve an incoming connection request.  AKA "approve request"
+     *
+     * @param $model
+     * @return bool
+     */
+    public function deny($model)
+    {
+        $deniedAtLeastOne = false;
+
+        if ($model->friends->count()) {
+            foreach ($model->friends as $friend) {
+                if ((int) $friend->getKey() === (int) $this->getKey()) {
+                    $friend->pivot->delete();
+                    $this->resetFriends();
+
+                    $deniedAtLeastOne = true;
+                }
+            }
+        }
+
+        return $deniedAtLeastOne;
+    }
+
+    /**
+     * Sort of acts like a relationship.  Actually just gets two relations which are collected together. ACCESSOR
      *
      * @return mixed
      */
     public function getFriendsAttribute()
     {
+        // so this is asking if 'friends' is a key in $this->relations
         if (!array_key_exists('friends', $this->relations)) {
             $this->loadFriends();
         }
@@ -118,6 +144,25 @@ trait Friendly
             return false;
         });
     }
+    /**
+     * Checks if Auth::user() is friends with $user
+     * @param  App\User  $model 
+     * @return boolean
+     */
+    public function isFriendsWith($model)
+    {
+        $isFriends = false;
+
+        if ($model->friends->count()) {
+            foreach ($model->friends as $friend) {
+                if ((int) $friend->getKey() === (int) $this->getKey()){
+                    $isFriends = true;
+                }
+            }
+        }
+
+        return $isFriends;
+    }
 
     /**
      * Eloquent relation defining connections this model initiated.
@@ -139,10 +184,28 @@ trait Friendly
      */
     public function receivedApprovedRequests()
     {
+        // The third argument is the foreign key name of the model on which you are defining the relationship, while the fourth argument is the foreign key name of the model that you are joining to
         return $this->belongsToMany(get_called_class(), 'friends', 'other_user_id', 'user_id')
+        // Set the columns on the pivot table to retrieve.
             ->withPivot('name', 'other_name', 'start', 'end', 'approved_at')
             ->whereNull('friends.deleted_at')
             ->whereNotNull('friends.approved_at')
+            ->withTimestamps();
+    }
+
+    /**
+     * Eloquent relationship defining incoming connection requests.
+     *
+     * @return mixed
+     */
+    public function receivedPendingRequests()
+    {
+        // The third argument is the foreign key name of the model on which you are defining the relationship, while the fourth argument is the foreign key name of the model that you are joining to
+        return $this->belongsToMany(get_called_class(), 'friends', 'other_user_id', 'user_id')
+        // Set the columns on the pivot table to retrieve.
+            ->withPivot('id', 'name', 'other_name', 'start', 'end', 'approved_at')
+            ->whereNull('friends.deleted_at')
+            ->whereNull('friends.approved_at')
             ->withTimestamps();
     }
 
@@ -172,21 +235,31 @@ trait Friendly
      */
     protected function mergeMineAndRequestedFriends()
     {
-        $all = $this->sentRequests;
-
-        if($more = $this->receivedApprovedRequests->all())
-        {
-            foreach($more as $m)
-            {
-                $all->add($m);
-            }
-        }
-
-        return $all;
+        return $this->sentRequests->merge($this->receivedApprovedRequests);
     }
 
     public function newPivot(Model $parent, array $attributes, $table, $exists)
     {
         return new FriendPivot($parent, $attributes, $table, $exists);
+    }
+
+    public function getAllFriendsBlogPosts()
+    {
+        // create an empty Collection
+        $allBlogPosts = new Collection;
+
+        // foreach through $this->friends as $friend
+        foreach ($this->friends as $friend){
+   
+            // add $friend->blog->posts() Collection to $allBlogPosts
+            $allBlogPosts->add($friend->blog->blogPost()->getResults());
+
+        }
+
+        $allBlogPosts = $allBlogPosts->collapse();
+
+        return $allBlogPosts->sortByDesc(function($item){
+            return $item->updated_at;
+        });
     }
 }
